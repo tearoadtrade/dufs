@@ -240,8 +240,8 @@ impl Server {
         let head_only = method == Method::HEAD || method == Method::OPTIONS;
 
         if has_query_flag(&query_params, "tokengen") {
-            // A share token must not be able to mint another token, otherwise a
-            // short-lived link could be renewed forever regardless of expiry.
+            // A share token must not be able to mint another token, otherwise
+            // a leaked link could be used to mint tokens for other paths.
             if via_token {
                 self.auth_reject(&mut res, false)?;
                 return Ok(res);

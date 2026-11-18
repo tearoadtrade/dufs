@@ -66,6 +66,7 @@ const ICONS = {
   edit: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>`,
   delete: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6.854 7.146a.5.5 0 1 0-.708.708L7.293 9l-1.147 1.146a.5.5 0 0 0 .708.708L8 9.707l1.146 1.147a.5.5 0 0 0 .708-.708L8.707 9l1.147-1.146a.5.5 0 0 0-.708-.708L8 8.293 6.854 7.146z"/><path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 3A1.5 1.5 0 0 0 11 4.5h2V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h5.5v2z"/></svg>`,
   view: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2zm0 1h8a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1"/></svg>`,
+  share: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`,
 }
 
 /**
@@ -446,6 +447,12 @@ async function setupIndexPage() {
     $download.classList.remove("hidden");
   }
 
+  if (DATA.user) {
+    const $share = document.querySelector(".share");
+    $share.classList.remove("hidden");
+    $share.addEventListener("click", () => shareUrl(baseUrl(), true));
+  }
+
   if (DATA.allow_upload) {
     setupDropzone();
     setupUploadFile();
@@ -573,6 +580,7 @@ function addPath(file, index, showMove, showDelete) {
   let url = newUrl(file.name);
   let actionDelete = "";
   let actionDownload = "";
+  let actionShare = "";
   let actionMove = "";
   let actionEdit = "";
   let actionView = "";
@@ -590,6 +598,9 @@ function addPath(file, index, showMove, showDelete) {
     <div class="action-btn" >
       <a class="dlwt" href="${url}" title="Download file" download>${ICONS.download}</a>
     </div>`;
+  }
+  if (DATA.user) {
+    actionShare = `<div onclick="sharePath(${index})" class="action-btn" title="Share: copy a read-only link, no login needed to download">${ICONS.share}</div>`;
   }
   const canMove = file.allow_upload && file.allow_delete;
   const canEdit = !isDir && canMove;
@@ -621,6 +632,7 @@ function addPath(file, index, showMove, showDelete) {
   let actionCell = `
   <td class="cell-actions">
     ${actionDownload}
+    ${actionShare}
     ${actionView}
     ${actionMove}
     ${actionDelete}
@@ -865,6 +877,46 @@ async function doDeletePath(name, url, cb) {
     } else {
       alert(`Cannot delete \`${name}\`, ${err.message}`);
     }
+  }
+}
+
+/**
+ * Share path: mint a token for the file/folder and copy the read-only link.
+ * @param {number} index
+ * @returns
+ */
+async function sharePath(index) {
+  const file = DATA.paths[index];
+  if (!file) return;
+  await shareUrl(newUrl(file.name), file.path_type.endsWith("Dir"));
+}
+
+/**
+ * Mint a share token for a URL and copy the read-only link. The link never
+ * expires; it stays valid until the account password changes.
+ * @param {string} url
+ * @param {boolean} isDir
+ */
+async function shareUrl(url, isDir) {
+  if (isDir && !url.endsWith("/")) url += "/";
+  try {
+    await checkAuth();
+    const tokengenUrl = new URL(url);
+    tokengenUrl.searchParams.set("tokengen", "");
+    const res = await fetch(tokengenUrl);
+    if (!res.ok) throw new Error("Failed to fetch token");
+    const token = await res.text();
+    const shareLink = new URL(url);
+    shareLink.searchParams.set("token", token);
+    const link = shareLink.toString();
+    try {
+      await navigator.clipboard.writeText(link);
+      alert(`Share link copied to clipboard:\n${link}`);
+    } catch {
+      prompt("Copy the share link:", link);
+    }
+  } catch (err) {
+    alert(`Failed to create share link, ${err.message}`);
   }
 }
 
