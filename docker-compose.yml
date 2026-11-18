@@ -1,0 +1,22 @@
+# dufs file-upload service on andr (Instabox).
+#
+# Equivalent to the live deployment (container `file-upload`, image
+# sigoden/dufs, uploads dir /data/home/uploads, host port 8080).
+# See docs/deploy-andr.md for the full deploy steps.
+#
+# Auth credentials come from the environment (DUFS_AUTH), never from this
+# file. Example (do NOT commit a real password anywhere):
+#   export DUFS_AUTH='knight:<password>@/:rw'
+# Or put it in a `.env` file next to this file (keep `.env` out of git).
+services:
+  file-upload:
+    image: sigoden/dufs
+    container_name: file-upload
+    restart: unless-stopped
+    ports:
+      - "8080:5000"
+    volumes:
+      - /data/home/uploads:/data
+    environment:
+      DUFS_AUTH: ${DUFS_AUTH:?DUFS_AUTH is required, e.g. DUFS_AUTH='knight:<password>@/:rw'}
+    command: /data -A
