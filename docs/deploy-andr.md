@@ -91,6 +91,29 @@ curl -s -u "$AUTH" "$BASE_URL/dufs-smoke.txt"
 curl -s -o /dev/null -w '%{http_code}\n' -u "$AUTH" -X DELETE "$BASE_URL/dufs-smoke.txt"
 ```
 
+The same checks are automated in `scripts/smoke-test.sh`:
+
+```sh
+./scripts/smoke-test.sh "$BASE_URL" 'knight:<password>'
+```
+
+## Smoke test after wake
+
+andr sleeps 01:00–09:00 every day. After it wakes, the container comes
+back by itself (`restart: unless-stopped`), but nothing verifies the
+service automatically. Run the smoke test once after wake:
+
+```sh
+./scripts/smoke-test.sh "$BASE_URL" 'knight:<password>'
+# exit 0: every step passed (401 unauthenticated, 200 authenticated,
+# upload 201, download matches, delete 204)
+# non-zero: the output names the step that failed — check
+# `docker ps` / `docker logs file-upload` on andr, then re-run.
+```
+
+If the public URL answers but auth behaves oddly right after wake, wait a
+few seconds for the container to finish starting and run the script again.
+
 ## Notes
 
 - Never put a real password in this repo (no `docker-compose.yml`,
