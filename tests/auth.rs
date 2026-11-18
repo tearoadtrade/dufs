@@ -744,7 +744,7 @@ fn token_auth_cannot_renew(
     #[with(&["-a", "user:pass@/"])] server: TestServer,
 ) -> Result<(), Error> {
     // A share token must not be able to mint another token, otherwise a
-    // short-lived link could be renewed forever.
+    // leaked link could be used to mint tokens for other paths.
     let url = format!("{}index.html?tokengen", server.url());
     let token = fetch!(b"GET", &url)
         .basic_auth("user", Some("pass"))
@@ -758,6 +758,69 @@ fn token_auth_cannot_renew(
 
     // But it must not be able to renew itself.
     let url = format!("{}index.html?token={token}&tokengen", server.url());
+    let resp = fetch!(b"GET", &url).send()?;
+    assert_eq!(resp.status(), 401);
+
+    Ok(())
+}
+
+#[rstest]
+fn token_auth_is_readonly(#[with(&["-a", "user:pass@/"])] server: TestServer) -> Result<(), Error> {
+    // A share token grants read-only access to its own path only: it must
+    // not authorize uploads or deletes, and it must not work for other
+    // paths.
+    let url = format!("{}index.html?tokengen", server.url());
+    let token = fetch!(b"GET", &url)
+        .basic_auth("user", Some("pass"))
+        .send()?
+        .text()?;
+
+    // Read works without credentials.
+    let url = format!("{}index.html?token={token}", server.url());
+    let resp = fetch!(b"GET", &url).send()?;
+    assert_eq!(resp.status(), 200);
+
+    // The token does not work for a different path.
+    let url = format!("{}no-such-file.txt?token={token}", server.url());
+    let resp = fetch!(b"GET", &url).send()?;
+    assert_eq!(resp.status(), 401);
+
+    // Writes are rejected even with the token.
+    let url = format!("{}new-file.txt?token={token}", server.url());
+    let resp = fetch!(b"PUT", &url).body(b"abc".to_vec()).send()?;
+    assert_eq!(resp.status(), 401);
+
+    let url = format!("{}index.html?token={token}", server.url());
+    let resp = fetch!(b"DELETE", &url).send()?;
+    assert_eq!(resp.status(), 401);
+
+    Ok(())
+}
+
+#[rstest]
+fn token_auth_directory_share(
+    #[with(&["-a", "user:pass@/"])] server: TestServer,
+) -> Result<(), Error> {
+    // A token minted for a directory grants read access to the listing
+    // and to files under it, but not to siblings.
+    let url = format!("{}dir1/?tokengen", server.url());
+    let token = fetch!(b"GET", &url)
+        .basic_auth("user", Some("pass"))
+        .send()?
+        .text()?;
+
+    // The listing itself works.
+    let url = format!("{}dir1/?token={token}", server.url());
+    let resp = fetch!(b"GET", &url).send()?;
+    assert_eq!(resp.status(), 200);
+
+    // Files under the shared directory work.
+    let url = format!("{}dir1/test.txt?token={token}", server.url());
+    let resp = fetch!(b"GET", &url).send()?;
+    assert_eq!(resp.status(), 200);
+
+    // A sibling directory does not.
+    let url = format!("{}dir2/test.txt?token={token}", server.url());
     let resp = fetch!(b"GET", &url).send()?;
     assert_eq!(resp.status(), 401);
 

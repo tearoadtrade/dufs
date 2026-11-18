@@ -25,7 +25,6 @@ const DIGEST_AUTH_TIMEOUT: u32 = 60 * 60; // 1 hour
 /// authenticated clients can add entries, and expired entries are pruned, but
 /// the cap keeps a long-running server's memory use predictable.
 const MAX_NONCE_COUNTS: usize = 10_000;
-const TOKEN_EXPIRATION: u64 = 1000 * 60 * 60 * 24 * 3; // 3 days
 /// Upper bound on the depth of an auth rule path. The permission tree is built
 /// and traversed recursively, so an absurdly deep rule would otherwise risk a
 /// stack overflow (which aborts the process under `panic = "abort"`).
@@ -166,7 +165,7 @@ impl AccessControl {
 
         if method == Method::GET {
             if let Some(token) = token {
-                if let Ok((user, ap)) = self.verify_token(token, path) {
+                if let Ok((user, ap)) = self.verify_token_scoped(token, path) {
                     return (
                         Some(user),
                         self.guard_with_target(ap, path, method, root).await,
@@ -374,7 +373,13 @@ impl AccessControl {
             .users
             .get(user)
             .ok_or_else(|| anyhow!("Not found user '{user}'"))?;
-        let exp = (unix_now().as_millis() as u64).saturating_add(TOKEN_EXPIRATION);
+        // Share tokens never expire: a share link stays valid until the
+        // account password changes, which invalidates every outstanding
+        // token because the signing key is derived from `user:pass`. The
+        // expiry field is kept in the token layout for backward
+        // compatibility; it is set to the maximum value so the check in
+        // `verify_token` never rejects a token minted here.
+        let exp = u64::MAX;
         let message = format!("{path}:{exp}");
         let signing_key = derive_secret_key(user, pass);
         let sig = signing_key.sign(message.as_bytes()).to_bytes();
@@ -414,6 +419,28 @@ impl AccessControl {
         let message = format!("{path}:{exp}");
         derive_secret_key(user, pass).verify(message.as_bytes(), &sig)?;
         Ok((user.to_string(), ap))
+    }
+
+    /// Verify a share token for `path` or any of its ancestors, so a token
+    /// minted for a directory also grants read access to everything under
+    /// it. The token stays bound to the path it was minted for and cannot
+    /// escape that subtree: only ancestors of the requested path are
+    /// tried, never siblings or unrelated paths.
+    fn verify_token_scoped<'a>(
+        &'a self,
+        token: &str,
+        path: &str,
+    ) -> Result<(String, &'a AccessPaths)> {
+        let mut candidate = path;
+        loop {
+            match self.verify_token(token, candidate) {
+                Ok(result) => return Ok(result),
+                Err(err) => match candidate.rfind('/') {
+                    Some(idx) => candidate = &candidate[..idx],
+                    None => return Err(err),
+                },
+            }
+        }
     }
 }
 
@@ -1854,5 +1881,41 @@ mod tests {
             .filter_map(|v| v.to_str().ok())
             .collect();
         assert!(challenges.iter().all(|v| !v.contains("stale=true")));
+    }
+
+    #[test]
+    fn test_share_token_never_expires() {
+        // Share links have no expiration: a minted token must carry the
+        // never-expire marker and still verify for its own path, but not
+        // for any other path.
+        let auth = AccessControl::new(&["user:pass@/"]).unwrap();
+        let token = auth.generate_token("dir/file.txt", "user").unwrap();
+        let raw = hex::decode(&token).unwrap();
+        assert!(raw.len() > 72);
+        let exp = u64::from_be_bytes(raw[64..72].try_into().unwrap());
+        assert_eq!(exp, u64::MAX);
+        let (user, _) = auth.verify_token(&token, "dir/file.txt").unwrap();
+        assert_eq!(user, "user");
+        assert!(auth.verify_token(&token, "other/file.txt").is_err());
+    }
+
+    #[test]
+    fn test_share_token_covers_subtree() {
+        // A token minted for a directory also verifies for files under it,
+        // so a shared directory can be browsed and its files downloaded.
+        // It must not verify for siblings or unrelated paths.
+        let auth = AccessControl::new(&["user:pass@/"]).unwrap();
+        let token = auth.generate_token("dir", "user").unwrap();
+        let (user, _) = auth.verify_token_scoped(&token, "dir/file.txt").unwrap();
+        assert_eq!(user, "user");
+        let (user, _) = auth
+            .verify_token_scoped(&token, "dir/nested/deep.txt")
+            .unwrap();
+        assert_eq!(user, "user");
+        assert!(auth.verify_token_scoped(&token, "dir2/file.txt").is_err());
+        assert!(auth
+            .verify_token_scoped(&token, "directory/file.txt")
+            .is_err());
+        assert!(auth.verify_token_scoped(&token, "other").is_err());
     }
 }
